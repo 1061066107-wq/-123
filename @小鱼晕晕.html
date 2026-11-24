@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Merry Christmas</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#000;overflow:hidden;}
+  #wrap{position:fixed;inset:0;background:#000;}
+  canvas{position:absolute;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;}
+  /* 文字/雪花层浮在上面，必须放行触摸，否则它会挡住下面 WebGL 画布的拖动 */
+  #ui{pointer-events:none;}
+  #hint{
+    position:fixed;right:18px;bottom:16px;z-index:9;
+    font:13px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    color:rgba(255,255,255,.45);letter-spacing:.08em;
+    pointer-events:none;transition:opacity 1.2s ease;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="gl"></canvas>
+  <canvas id="ui"></canvas>
+</div>
+<div id="hint">拖动旋转 · 双击全屏</div>
+
+<script>
+/* ============================================================
+   3D 旋转圣诞树 — Web 版（由 ZekangLi-Zico/Christmas-Tree 的 Pygame 代码移植）
+   参数与原版一致；粒子数量可在 CONFIG 中调整
+   ============================================================ */
+const CONFIG = {
+  W: 1600, H: 900,            // 虚拟画布尺寸（与原版一致，自动等比适配屏幕）
+  TREE_POINTS: 50000,
+  GROUND_POINTS: 4000,
+  STAR_POINTS: 1200,
+  HEART_POINTS: 1000,
+  SNOW2D_POINTS: 10,
+  CAM_DIST: 13,
+  CAM_HEIGHT: 6.0,
+  PITCH: -0.25,
+  TREE_HEIGHT: 12.0,
+  TITLE: "Merry Christmas",
+  SIGNATURE: "647",            // ← 换成你自己的名字/备注（也支持 ?text=xxx）
+  PINK_TEXT: "@小鱼晕晕",       // 树旁边的粉色字，留空则隐藏
+  PINK_COLOR: "#ff7ec8"        // 粉色字颜色
+};
+const C = CONFIG;
+const TAU = Math.PI * 2;
+
+/* ---------------- 粒子生成（与原版逐行对应） ---------------- */
+function genTreePoints(){
+  const pts = [];
+  const loops = 9;
+  const spiralN = Math.floor(C.TREE_POINTS * 0.7);
+  for (let i = 0; i < spiralN; i++){
+    const u = Math.random();
+    const h = Math.pow(u, 1.6);
+    const y = C.TREE_HEIGHT * h + 0.2;
+    let baseR = Math.pow(1 - h, 1.1) * 3.2;
+    const branchWave = Math.max(0, Math.sin((h * 5.8 + 0.15) * TAU));
+    baseR *= 1.0 + 0.65 * branchWave;
+    const t = u * loops * TAU;
+    const angle = t + (Math.random() * 0.44 - 0.22);
+    const r = baseR * (0.85 + Math.random() * 0.23);
+    const x = Math.cos(angle) * r;
+    const z = Math.sin(angle) * r;
+    let midBoost = 1.0 - Math.abs(h - 0.55) * 1.5;
+    midBoost = Math.max(0.15, midBoost);
+    const baseG = 155 + Math.floor(90 * midBoost);
+    const baseB = 185 + Math.floor(70 * midBoost);
+    let col = [255,
+      Math.min(255, baseG + randInt(-15, 20)),
+      Math.min(255, baseB + randInt(-15, 35))];
+    if (Math.random() < 0.08) col = [255, 255 - randInt(0, 35), 230 + randInt(0, 25)];
+    pts.push(x, y, z, col[0], col[1], col[2]);
+  }
+  const fillN = C.TREE_POINTS - spiralN;
+  for (let i = 0; i < fillN; i++){
+    const h = Math.pow(Math.random(), 1.9);
+    const y = C.TREE_HEIGHT * h + 0.2 + (Math.random() * 0.16 - 0.08);
+    let baseR = Math.pow(1 - h, 1.1) * 4.3;
+    const branchWave = Math.max(0, Math.sin((h * 5.8 + 0.15) * TAU));
+    baseR *= 1.0 + 0.65 * branchWave;
+    const r = baseR * Math.sqrt(Math.random());
+    const angle = Math.random() * TAU;
+    const x = Math.cos(angle) * r + (Math.random() * 0.16 - 0.08);
+    const z = Math.sin(angle) * r + (Math.random() * 0.16 - 0.08);
+    const g = randInt(165, 225);
+    const b = randInt(190, 250);
+    pts.push(x, y, z, 255, g, b);
+  }
+  return pts;
+}
+
+function genGroundPoints(){
+  const pts = [];
+  const rings = [4.6, 6.0, 7.4, 8.8, 10.2, 11.4];
+  for (let i = 0; i < C.GROUND_POINTS; i++){
+    const ring = rings[Math.floor(Math.random() * rings.length)];
+    const r = gauss(ring, 0.3);
+    const theta = Math.random() * TAU;
+    const x = Math.cos(theta) * r;
+    const z = Math.sin(theta) * r;
+    const y = -0.25;
+    const c = (Math.random() < 0.15) ? randInt(235, 255) : randInt(190, 235);
+    pts.push(x, y, z, c, c, 255);
+  }
+  return pts;
+}
+
+function genStarPoints(){
+  const pts = [];
+  for (let i = 0; i < C.STAR_POINTS; i++){
+    const x = Math.random() * 36 - 18;
+    const z = Math.random() * 36 - 18;
+    const y = 3.0 + Math.random() * 15;
+    const base = randInt(215, 255);
+    pts.push(x, y, z, base, base, 255);
+  }
+  return pts;
+}
+
+function genHeartPoints(){
+  const pts = [];
+  const scale = 0.9;
+  const topY = C.TREE_HEIGHT + 0.05;
+  let guard = 0;
+  while (HEART_COUNT < C.HEART_POINTS && guard < 1e7){
+    guard++;
+    const x = Math.random() * 2.6 - 1.3;
+    const y = Math.random() * 2.8 - 1.4;
+    const f = Math.pow(x * x + y * y - 1.0, 3) - x * x * (y * y * y);
+    if (f <= 0.0){
+      const wx = x * scale * 0.8;
+      const wy = topY + (y + 1.0) * scale * 0.5;
+      const wz = Math.random() * 0.36 - 0.18;
+      const dist = Math.hypot(x, y);
+      const factor = Math.max(0.35, 1.15 - 0.5 * dist);
+      let g = Math.floor(130 * factor + 80);
+      let b = Math.floor(190 * factor + 70);
+      g = Math.max(120, Math.min(255, g));
+      b = Math.max(120, Math.min(255, b));
+      pts.push(wx, wy, wz, 255, g, b);
+      HEART_COUNT++;
+    }
+  }
+  return pts;
+}
+let HEART_COUNT = 0;
+
+const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+function gauss(mu, sigma){
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return mu + sigma * Math.sqrt(-2 * Math.log(u)) * Math.cos(TAU * v);
+}
+
+/* ---------------- 数据打包 ---------------- */
+function buildBuffers(){
+  const tree = genTreePoints();
+  const ground = genGroundPoints();
+  const stars = genStarPoints();
+  const heart = genHeartPoints();
+  const all = tree.concat(ground, stars, heart);
+  const count = all.length / 6;
+  const pos = new Float32Array(count * 3);
+  const col = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++){
+    pos[i * 3]     = all[i * 6];
+    pos[i * 3 + 1] = all[i * 6 + 1];
+    pos[i * 3 + 2] = all[i * 6 + 2];
+    col[i * 3]     = all[i * 6 + 3] / 255;
+    col[i * 3 + 1] = all[i * 6 + 4] / 255;
+    col[i * 3 + 2] = all[i * 6 + 5] / 255;
+  }
+  return { pos, col, count };
+}
+
+/* ---------------- WebGL ---------------- */
+const glCanvas = document.getElementById('gl');
+const uiCanvas = document.getElementById('ui');
+const gl = glCanvas.getContext('webgl', {
+  antialias: true, alpha: false, depth: true,
+  powerPreference: 'high-performance', preserveDrawingBuffer: false
+});
+const ui = uiCanvas.getContext('2d');
+
+const VS = `
+attribute vec3 aPos;
+attribute vec3 aColor;
+uniform float uAngle;
+uniform vec2 uScale;
+uniform float uPointScale;
+varying vec3 vColor;
+
+const float PITCH = -0.25;
+const float CAM_DIST = 13.0;
+const float CAM_HEIGHT = 6.0;
+const float REF_H = 900.0;
+
+void main(){
+  float ca = cos(uAngle);
+  float sa = sin(uAngle);
+  float xz = aPos.x * ca - aPos.z * sa;
+  float zz = aPos.x * sa + aPos.z * ca;
+
+  float cp = cos(PITCH);
+  float sp = sin(PITCH);
+  float yp = aPos.y * cp - zz * sp;
+  float zp = aPos.y * sp + zz * cp + CAM_DIST;
+  yp = yp - CAM_HEIGHT;
+
+  if (zp <= 0.1){
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    gl_PointSize = 0.0;
+    vColor = vec3(0.0);
+    return;
+  }
+
+  float f = (REF_H * 0.63) / zp;
+  float sx = 800.0 + xz * f;
+  float sy = 450.0 - yp * f;
+
+  float ndcX = (sx - 800.0) * uScale.x;
+  float ndcY = -(sy - 450.0) * uScale.y;
+  float ndcZ = (zp / 34.0) * 2.0 - 1.0;
+
+  gl_Position = vec4(ndcX * zp, ndcY * zp, ndcZ * zp, zp);
+  gl_PointSize = max(1.0, 3.6 - zp * 0.13) * uPointScale;
+  vColor = aColor;
+}`;
+
+const FS = `
+precision mediump float;
+varying vec3 vColor;
+void main(){
+  vec2 c = gl_PointCoord - vec2(0.5);
+  float d = length(c) * 2.0;
+  if (d > 1.0) discard;
+  float a = 1.0 - smoothstep(0.72, 1.0, d);
+  gl_FragColor = vec4(vColor, a);
+}`;
+
+function compile(type, src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+const data = buildBuffers();
+
+const bufPos = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, bufPos);
+gl.bufferData(gl.ARRAY_BUFFER, data.pos, gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(prog, 'aPos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+const bufCol = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, bufCol);
+gl.bufferData(gl.ARRAY_BUFFER, data.col, gl.STATIC_DRAW);
+const aColor = gl.getAttribLocation(prog, 'aColor');
+gl.enableVertexAttribArray(aColor);
+gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
+
+const uAngle = gl.getUniformLocation(prog, 'uAngle');
+const uScale = gl.getUniformLocation(prog, 'uScale');
+const uPointScale = gl.getUniformLocation(prog, 'uPointScale');
+
+gl.enable(gl.DEPTH_TEST);
+gl.depthFunc(gl.LESS);
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+gl.clearColor(0, 0, 0, 1);
+
+/* ---------------- 尺寸自适应（等比 contain，永远不裁切） ---------------- */
+let dpr = 1, cssW = 0, cssH = 0, scale = 1;
+
+function resize(){
+  cssW = window.innerWidth;
+  cssH = window.innerHeight;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const bw = Math.floor(cssW * dpr);
+  const bh = Math.floor(cssH * dpr);
+  glCanvas.width = bw; glCanvas.height = bh;
+  uiCanvas.width = bw; uiCanvas.height = bh;
+  gl.viewport(0, 0, bw, bh);
+  // 虚拟 1600x900 画布铺满屏幕（cover），与原版视野一致
+  scale = Math.max(cssW / C.W, cssH / C.H);
+  gl.uniform2f(uScale, (2 * scale) / cssW, (2 * scale) / cssH);
+  gl.uniform1f(uPointScale, scale * dpr);
+  layer = null;
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+
+/* ---------------- 前景 2D 大雪花 ---------------- */
+const flakes = [];
+let layer = null;
+
+function initSnow(){
+  for (let i = 0; i < C.SNOW2D_POINTS; i++) flakes.push(makeFlake());
+}
+function makeFlake(){
+  const x = Math.random() * C.W;
+  const y = -80 + Math.random() * 70;
+  const radius = 10 + Math.random() * 6;
+  const speed = 30 + Math.random() * 15;
+  const travel = C.H + 80 - y;
+  const life = travel / speed;
+  return { x, y, r: radius, v: speed, life, maxLife: life };
+}
+function updateSnow(dt){
+  for (let i = 0; i < flakes.length; i++){
+    const f = flakes[i];
+    f.y += f.v * dt;
+    f.life -= dt;
+    if (f.life <= 0 || f.y > C.H + 50){
+      Object.assign(f, makeFlake());
+    }
+  }
+}
+function drawSnow(){
+  for (const f of flakes){
+    if (f.maxLife <= 0) continue;
+    const phase = f.life / f.maxLife;
+    let alpha = phase > 0.3 ? 255 : Math.floor(255 * (phase / 0.3));
+    alpha = Math.max(0, Math.min(255, alpha));
+    const rings = [
+      [f.r * 1.3, alpha / 20],
+      [f.r * 1.0, alpha / 12],
+      [f.r * 0.75, alpha / 6],
+      [f.r * 0.55, alpha / 3],
+      [f.r * 0.45, alpha]
+    ];
+    for (const [rr, a] of rings){
+      const ai = Math.floor(a);
+      if (ai <= 0) continue;
+      ui.beginPath();
+      ui.arc(f.x, f.y, Math.max(0.5, rr), 0, TAU);
+      ui.fillStyle = `rgba(255,255,255,${ai / 255})`;
+      ui.fill();
+    }
+  }
+}
+
+/* ---------------- 文字 ---------------- */
+function drawText(){
+  const portrait = cssW / cssH < 0.95;
+  ui.save();
+  ui.scale(scale * dpr, scale * dpr);
+  const fontStack = '"Snell Roundhand","Segoe Script","Monotype Corsiva","Bradley Hand",cursive';
+  ui.fillStyle = '#fff';
+  ui.textBaseline = 'alphabetic';
+  if (portrait){
+    // 竖屏：文字放到底部渐隐区，避免压在树上
+    ui.font = `italic 38px ${fontStack}`;
+    ui.fillText(C.TITLE, 40, C.H - 96);
+    if (C.SIGNATURE){
+      ui.font = `italic 38px ${fontStack}`;
+      ui.fillText(C.SIGNATURE, 40, C.H - 52);
+    }
+  } else {
+    ui.font = `italic 45px ${fontStack}`;
+    ui.fillText(C.TITLE, 40, C.H / 3 + 32);
+    if (C.SIGNATURE){
+      ui.font = `italic 45px ${fontStack}`;
+      ui.fillText(C.SIGNATURE, 40, C.H / 3 + 32 + 55);
+    }
+  }
+
+  // 树旁边的粉色名字
+  if (C.PINK_TEXT){
+    const bob = Math.sin(tNow * 0.9) * 5;
+    if (portrait){
+      drawPink(40, C.H - 154 + bob, 40, false);
+    } else {
+      // 以“屏幕实际右边缘”为基准，避免宽高比不是 16:9 时被裁掉
+      const vw = cssW / scale;
+      drawPink(vw - 40, C.H * 0.44 + bob, 52, true);
+    }
+  }
+
+  ui.restore();
+}
+
+/* 粉色发光文字（两次绘制：外发光 + 实心） */
+function drawPink(x, y, size, rightAlign){
+  const stack = '"STXingkai","华文行楷","FZJinglei","KaiTi","楷体","PingFang SC","Microsoft YaHei",sans-serif';
+  ui.font = `italic ${size}px ${stack}`;
+  ui.textBaseline = 'alphabetic';
+  const w = ui.measureText(C.PINK_TEXT).width;
+  const px = rightAlign ? x - w : x;
+
+  ui.fillStyle = C.PINK_COLOR;
+  ui.shadowColor = 'rgba(255,105,190,0.9)';
+  ui.shadowBlur = 30;
+  ui.globalAlpha = 0.7;
+  ui.fillText(C.PINK_TEXT, px, y);
+
+  ui.shadowBlur = 10;
+  ui.globalAlpha = 1;
+  ui.fillText(C.PINK_TEXT, px, y);
+
+  ui.shadowBlur = 0;
+  ui.shadowColor = 'transparent';
+}
+
+/* 底部压暗渐隐，保证文字与画面的层次 */
+function drawFade(){
+  ui.save();
+  ui.scale(dpr, dpr);
+  const g = ui.createLinearGradient(0, cssH * 0.72, 0, cssH);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(1, 'rgba(0,0,0,0.82)');
+  ui.fillStyle = g;
+  ui.fillRect(0, cssH * 0.72, cssW, cssH * 0.28);
+  ui.restore();
+}
+
+/* ---------------- 交互 ---------------- */
+let angle = 0;
+let tNow = 0;
+let dragOffset = 0;
+let dragging = false;
+let lastX = 0;
+let hintShown = true;
+
+glCanvas.addEventListener('pointerdown', e => {
+  dragging = true; lastX = e.clientX; glCanvas.setPointerCapture(e.pointerId);
+  if (hintShown){ hintShown = false; document.getElementById('hint').style.opacity = 0; }
+});
+glCanvas.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  dragOffset += (e.clientX - lastX) * 0.012;
+  lastX = e.clientX;
+});
+glCanvas.addEventListener('pointerup', () => dragging = false);
+glCanvas.addEventListener('pointercancel', () => dragging = false);
+
+/* 兼容部分 App 内置浏览器 / 旧 WebView（不派发 PointerEvent，只认 touch） */
+if (!window.PointerEvent){
+  glCanvas.addEventListener('touchstart', e => {
+    dragging = true; lastX = e.touches[0].clientX;
+    if (hintShown){ hintShown = false; document.getElementById('hint').style.opacity = 0; }
+  }, { passive: true });
+  glCanvas.addEventListener('touchmove', e => {
+    if (!dragging) return;
+    const x = e.touches[0].clientX;
+    dragOffset += (x - lastX) * 0.012;
+    lastX = x;
+    if (e.cancelable) e.preventDefault();
+  }, { passive: false });
+  glCanvas.addEventListener('touchend', () => dragging = false);
+  glCanvas.addEventListener('touchcancel', () => dragging = false);
+}
+glCanvas.addEventListener('dblclick', () => {
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+  else document.exitFullscreen?.();
+});
+setTimeout(() => { document.getElementById('hint').style.opacity = 0; }, 5000);
+
+/* ---------------- 主循环 ---------------- */
+let prev = performance.now();
+function frame(now){
+  const dt = Math.min((now - prev) / 1000, 0.05);
+  prev = now;
+  tNow = now / 1000;
+
+  angle += 0.0045 * (dt / (1 / 60)) * (dragging ? 0.5 : 1);
+
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.uniform1f(uAngle, angle + dragOffset);
+  gl.drawArrays(gl.POINTS, 0, data.count);
+
+  updateSnow(dt);
+  ui.clearRect(0, 0, uiCanvas.width, uiCanvas.height);
+  ui.save();
+  ui.scale(dpr, dpr);
+  ui.translate(cssW / 2, cssH / 2);
+  ui.scale(scale, scale);
+  ui.translate(-C.W / 2, -C.H / 2);
+  drawSnow();
+  ui.restore();
+
+  drawFade();
+
+  drawText();
+
+  requestAnimationFrame(frame);
+}
+
+/* ---------------- 启动 ---------------- */
+(function init(){
+  const p = new URLSearchParams(location.search);
+  if (p.get('text') !== null) C.SIGNATURE = p.get('text').slice(0, 24);
+  if (p.get('name') !== null) C.PINK_TEXT = p.get('name').slice(0, 20);
+  resize();
+  initSnow();
+  document.getElementById('hint').textContent =
+    '拖动旋转 · 双击全屏 · ' + data.count.toLocaleString() + ' 粒子';
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
